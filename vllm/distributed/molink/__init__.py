@@ -20,20 +20,6 @@ Key Components:
 - TensorDeliveryManager: Async tensor delivery in background process
 - parallel_state: MoLink-aware layer distribution utilities
 
-Usage:
-1. Start head node:
-   --distributed-executor-backend molink
-   --molink-enabled
-   --molink-grpc-port 50051
-   --molink-start-layer 0
-   --molink-end-layer 20
-
-2. Start worker node:
-   --distributed-executor-backend molink
-   --molink-enabled
-   --molink-initial-peer "192.168.1.100:50051"
-   --molink-start-layer 20
-   --molink-end-layer -1
 """
 
 from .executor import MolinkExecutor
