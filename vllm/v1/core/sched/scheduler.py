@@ -184,7 +184,11 @@ class Scheduler(SchedulerInterface):
             enable_kv_cache_events=self.enable_kv_cache_events,
             dcp_world_size=self.dcp_world_size,
         )
-        self.use_pp = self.parallel_config.pipeline_parallel_size > 1
+        # Check for MoLink cross-node PP
+        molink_config = getattr(vllm_config, 'molink_config', None)
+        is_molink_enabled = molink_config is not None and molink_config.enabled
+        # Use PP mode if either local PP or MoLink is enabled
+        self.use_pp = self.parallel_config.pipeline_parallel_size > 1 or is_molink_enabled
 
     def schedule(self) -> SchedulerOutput:
         # NOTE(woosuk) on the scheduling algorithm:

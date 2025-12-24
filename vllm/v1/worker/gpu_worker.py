@@ -6,7 +6,7 @@ import gc
 import os
 from contextlib import AbstractContextManager, nullcontext
 from types import NoneType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 import torch.distributed
@@ -120,6 +120,30 @@ class Worker(WorkerBase):
             self.profiler = CudaProfilerWrapper()
         else:
             self.profiler = None
+        
+        # For MoLink: storage for intermediate tensors from gRPC
+        self._molink_intermediate_tensors: Optional[IntermediateTensors] = None
+
+    def _molink_set_intermediate_tensors(
+        self, intermediate_tensors: IntermediateTensors
+    ) -> None:
+        """Set intermediate tensors for MoLink (called via RPC).
+        
+        Args:
+            intermediate_tensors: Tensors from previous pipeline stage.
+        """
+        self._molink_intermediate_tensors = intermediate_tensors
+        logger.info(f"[MoLink][Worker] Set intermediate tensors with {len(intermediate_tensors.tensors)} items")
+    
+    def _molink_get_intermediate_tensors(self) -> Optional[IntermediateTensors]:
+        """Get and clear stored intermediate tensors for MoLink.
+        
+        Returns:
+            Stored intermediate tensors or None.
+        """
+        tensors = self._molink_intermediate_tensors
+        self._molink_intermediate_tensors = None
+        return tensors
 
     def sleep(self, level: int = 1) -> None:
         from vllm.device_allocator.cumem import CuMemAllocator
@@ -551,13 +575,30 @@ class Worker(WorkerBase):
                 self.vllm_config, num_input_tokens
             )
         }
+        
+        # Check if MoLink is enabled
+        is_molink = (
+            hasattr(self.vllm_config, 'molink_config') and 
+            self.vllm_config.molink_config and 
+            self.vllm_config.molink_config.enabled
+        )
+        
         if forward_pass and not get_pp_group().is_first_rank:
-            intermediate_tensors = IntermediateTensors(
-                get_pp_group().recv_tensor_dict(
-                    all_gather_group=get_tp_group(),
-                    all_gather_tensors=all_gather_tensors,
+            if is_molink:
+                # For MoLink: get intermediate tensors from local storage
+                intermediate_tensors = self._molink_get_intermediate_tensors()
+                if intermediate_tensors:
+                    logger.info(f"[MoLink][Worker] Retrieved intermediate tensors with {len(intermediate_tensors.tensors)} items")
+                else:
+                    logger.warning(f"[MoLink][Worker] No intermediate tensors found in local storage!")
+            else:
+                # Standard NCCL pipeline parallel
+                intermediate_tensors = IntermediateTensors(
+                    get_pp_group().recv_tensor_dict(
+                        all_gather_group=get_tp_group(),
+                        all_gather_tensors=all_gather_tensors,
+                    )
                 )
-            )
 
         with self.annotate_profile(scheduler_output):
             output = self.model_runner.execute_model(
@@ -568,18 +609,32 @@ class Worker(WorkerBase):
 
         assert isinstance(output, IntermediateTensors)
         parallel_config = self.vllm_config.parallel_config
-        assert (
-            parallel_config.distributed_executor_backend != "external_launcher"
-            and not get_pp_group().is_last_rank
-        )
+        
+        if is_molink:
+            # For MoLink: check if we're the last stage
+            # Last stage should NOT return intermediate tensors here
+            # Instead, return None to trigger sampling
+            if get_pp_group().is_last_rank:
+                logger.info(f"[MoLink][Worker] Last stage, returning None to trigger sampling")
+                return None
+            else:
+                # Non-last stage: intermediate tensors will be sent via gRPC
+                logger.info(f"[MoLink][Worker] Intermediate stage, generated {len(output.tensors)} tensors, will be sent via gRPC")
+                return output
+        else:
+            # Standard NCCL pipeline parallel
+            assert (
+                parallel_config.distributed_executor_backend != "external_launcher"
+                and not get_pp_group().is_last_rank
+            )
 
-        get_pp_group().send_tensor_dict(
-            output.tensors,
-            all_gather_group=get_tp_group(),
-            all_gather_tensors=all_gather_tensors,
-        )
+            get_pp_group().send_tensor_dict(
+                output.tensors,
+                all_gather_group=get_tp_group(),
+                all_gather_tensors=all_gather_tensors,
+            )
 
-        return None
+            return None
 
     def take_draft_token_ids(self) -> DraftTokenIds | None:
         return self.model_runner.take_draft_token_ids()
@@ -888,6 +943,24 @@ def init_worker_distributed_environment(
         parallel_config.pipeline_parallel_size,
         parallel_config.decode_context_parallel_size,
     )
+
+    # Apply MoLink patches after distributed initialization if enabled
+    molink_config = getattr(vllm_config, 'molink_config', None)
+    if molink_config is not None and molink_config.enabled:
+        from vllm.distributed.molink import (
+            init_molink_parallel_state,
+            apply_molink_patches,
+        )
+        start_layer, end_layer = molink_config.get_serving_layers()
+        init_molink_parallel_state(
+            enabled=True,
+            start_layer=start_layer,
+            end_layer=end_layer,
+        )
+        apply_molink_patches()
+        logger.info(
+            f"Worker {rank}: MoLink initialized with layers {start_layer}-{end_layer}"
+        )
 
     # Init ec connector here before KV caches caches init
     # NOTE: We do not init KV caches for Encoder-only instance in EPD disagg mode

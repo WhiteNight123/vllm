@@ -45,6 +45,7 @@ from vllm.config import (
     LoadConfig,
     LoRAConfig,
     ModelConfig,
+    MolinkConfig,
     MultiModalConfig,
     ObservabilityConfig,
     ParallelConfig,
@@ -534,6 +535,19 @@ class EngineArgs:
     kv_events_config: KVEventsConfig | None = None
 
     ec_transfer_config: ECTransferConfig | None = None
+    
+    molink_config: MolinkConfig | None = None
+    # Individual MoLink fields
+    molink_enabled: bool = False
+    molink_initial_peer: str | None = None
+    molink_grpc_port: int = 0
+    molink_start_layer: int = 0
+    molink_end_layer: int = -1
+    molink_max_message_size_mb: int = 200
+    molink_connection_timeout_s: float = 30.0
+    molink_heartbeat_interval_s: float = 5.0
+    molink_enable_compression: bool = False
+    molink_num_delivery_workers: int = 2
 
     generation_config: str = ModelConfig.generation_config
     enable_sleep_mode: bool = ModelConfig.enable_sleep_mode
@@ -1144,6 +1158,68 @@ class EngineArgs:
         vllm_group.add_argument("--kv-events-config", **vllm_kwargs["kv_events_config"])
         vllm_group.add_argument(
             "--ec-transfer-config", **vllm_kwargs["ec_transfer_config"]
+        )
+        vllm_group.add_argument(
+            "--molink-config", **vllm_kwargs["molink_config"]
+        )
+        # Individual MoLink arguments
+        vllm_group.add_argument(
+            "--molink-enabled",
+            action="store_true",
+            help="Enable MoLink cross-node pipeline parallelism."
+        )
+        vllm_group.add_argument(
+            "--molink-initial-peer",
+            type=str,
+            default=None,
+            help="The gRPC address of the initial node to join (e.g., '192.168.1.100:50051'). If not provided, this node is the head node."
+        )
+        vllm_group.add_argument(
+            "--molink-grpc-port",
+            type=int,
+            default=0,
+            help="The gRPC port to listen on. If 0, a free port will be chosen automatically."
+        )
+        vllm_group.add_argument(
+            "--molink-start-layer",
+            type=int,
+            default=0,
+            help="The first layer this node handles (inclusive)."
+        )
+        vllm_group.add_argument(
+            "--molink-end-layer",
+            type=int,
+            default=-1,
+            help="The last layer this node handles (exclusive). -1 means all remaining layers."
+        )
+        vllm_group.add_argument(
+            "--molink-max-message-size-mb",
+            type=int,
+            default=200,
+            help="Maximum gRPC message size in MB."
+        )
+        vllm_group.add_argument(
+            "--molink-connection-timeout-s",
+            type=float,
+            default=30.0,
+            help="Timeout for gRPC connections in seconds."
+        )
+        vllm_group.add_argument(
+            "--molink-heartbeat-interval-s",
+            type=float,
+            default=5.0,
+            help="Interval for health check heartbeats in seconds."
+        )
+        vllm_group.add_argument(
+            "--molink-enable-compression",
+            action="store_true",
+            help="Enable gRPC message compression."
+        )
+        vllm_group.add_argument(
+            "--molink-num-delivery-workers",
+            type=int,
+            default=2,
+            help="Number of workers for async tensor delivery."
         )
         vllm_group.add_argument(
             "--compilation-config", "-O", **vllm_kwargs["compilation_config"]
@@ -1769,6 +1845,22 @@ class EngineArgs:
                 self.max_cudagraph_capture_size
             )
 
+        # Construct MolinkConfig from individual fields if enabled
+        molink_config = self.molink_config
+        if self.molink_enabled and molink_config is None:
+            molink_config = MolinkConfig(
+                enabled=self.molink_enabled,
+                initial_peer=self.molink_initial_peer,
+                grpc_port=self.molink_grpc_port,
+                start_layer=self.molink_start_layer,
+                end_layer=self.molink_end_layer,
+                max_message_size_mb=self.molink_max_message_size_mb,
+                connection_timeout_s=self.molink_connection_timeout_s,
+                heartbeat_interval_s=self.molink_heartbeat_interval_s,
+                enable_compression=self.molink_enable_compression,
+                num_delivery_workers=self.molink_num_delivery_workers,
+            )
+
         config = VllmConfig(
             model_config=model_config,
             cache_config=cache_config,
@@ -1784,6 +1876,7 @@ class EngineArgs:
             kv_transfer_config=self.kv_transfer_config,
             kv_events_config=self.kv_events_config,
             ec_transfer_config=self.ec_transfer_config,
+            molink_config=molink_config,
             additional_config=self.additional_config,
         )
 

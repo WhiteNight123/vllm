@@ -19,6 +19,7 @@ from vllm.config.model import (
     iter_architecture_defaults,
     try_match_architecture_defaults,
 )
+from vllm.config.molink import MolinkConfig
 from vllm.config.multimodal import MultiModalConfig
 from vllm.config.observability import ObservabilityConfig
 from vllm.config.parallel import EPLBConfig, ParallelConfig
@@ -93,6 +94,8 @@ __all__ = [
     "get_attr_docs",
     "is_init_field",
     "update_config",
+    # From vllm.config.molink
+    "MolinkConfig",
     # From vllm.config.vllm
     "VllmConfig",
     "get_cached_compilation_config",

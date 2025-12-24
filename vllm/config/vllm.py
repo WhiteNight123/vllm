@@ -35,6 +35,7 @@ from .kv_transfer import KVTransferConfig
 from .load import LoadConfig
 from .lora import LoRAConfig
 from .model import ModelConfig
+from .molink import MolinkConfig
 from .observability import ObservabilityConfig
 from .parallel import ParallelConfig
 from .scheduler import SchedulerConfig
@@ -107,6 +108,8 @@ class VllmConfig:
     """The configurations for event publishing."""
     ec_transfer_config: ECTransferConfig | None = None
     """The configurations for distributed EC cache transfer."""
+    molink_config: MolinkConfig | None = None
+    """The configurations for MoLink cross-node pipeline parallelism."""
     # some opaque config, only used to provide additional information
     # for the hash computation, mainly used for testing, debugging or out of
     # tree config registration.
