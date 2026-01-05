@@ -608,6 +608,15 @@ class Worker(WorkerBase):
                 return output
 
         assert isinstance(output, IntermediateTensors)
+        # **********************instrument*****************************
+        import time
+        import os
+        server_id = os.environ.get('VLLM_SERVER_ID', '1')
+        torch.cuda.synchronize()
+        f = open(f'server{server_id}.log', 'a')
+        print(f'{0} trans starts at {time.time()}', file = f)
+        f.close()
+        # **********************instrument*****************************
         parallel_config = self.vllm_config.parallel_config
         
         if is_molink:

@@ -2652,11 +2652,46 @@ class GPUModelRunner(
         ):
             scheduler_output = deepcopy(scheduler_output)
 
+        # **********************instrument*****************************
+        # unable to record batch id in V1  
+        import os
+        server_id = os.environ.get('VLLM_SERVER_ID', '1')
+        file_name = f'server{server_id}.log'
+        f = open(file_name, 'a')
+
+        num_new_reqs = len(scheduler_output.scheduled_new_reqs)
+        num_old_reqs = len(scheduler_output.scheduled_cached_reqs.req_ids)
+
+        batch_size = num_new_reqs + num_old_reqs
+
+        cur_stage = ''
+        if num_new_reqs == 0 and num_old_reqs > 0:
+            cur_stage = 'decode'
+        elif num_new_reqs > 0 and num_old_reqs == 0:
+            cur_stage = 'prefill'
+        else:
+            cur_stage = 'mixed'
+        # **********************instrument*****************************
+
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
         with record_function_or_nullcontext("gpu_model_runner: preprocess"):
             with self.synchronize_input_prep():
                 # Update persistent batch states.
                 self._update_states(scheduler_output)
+
+                # **********************instrument*****************************
+                torch.cuda.synchronize()
+                cur = time.time()
+                for new_reqs in scheduler_output.scheduled_new_reqs:
+                    req_id = new_reqs.req_id
+                    print(f'request {req_id} arrives at worker at {cur}', file=f)
+
+                for old_req_id in scheduler_output.scheduled_cached_reqs.req_ids:
+                    print(f'request {old_req_id} arrives at worker at {cur}', file=f)
+
+                if intermediate_tensors is not None:
+                    print(f'{0} recv at {time.time()}', file=f)
+                # **********************instrument*****************************
 
                 if has_ec_transfer() and get_ec_transfer().is_producer:
                     with self.maybe_get_ec_connector_output(
@@ -2664,6 +2699,11 @@ class GPUModelRunner(
                         encoder_cache=self.encoder_cache,
                     ) as ec_connector_output:
                         self._execute_mm_encoder(scheduler_output)
+
+                        # **********************instrument*****************************
+                        f.close()
+                        # **********************instrument*****************************
+
                         return make_empty_encoder_model_runner_output(scheduler_output)
 
                 if not num_scheduled_tokens:
@@ -2681,7 +2721,17 @@ class GPUModelRunner(
                         self._dummy_run(1)
                     if not has_kv_transfer_group():
                         # Return empty ModelRunnerOutput if no work to do.
+
+                        # **********************instrument*****************************
+                        f.close()
+                        # **********************instrument*****************************
+
                         return EMPTY_MODEL_RUNNER_OUTPUT
+
+                    # **********************instrument*****************************
+                    f.close()
+                    # **********************instrument*****************************
+
                     return self.kv_connector_no_forward(
                         scheduler_output, self.vllm_config
                     )
@@ -2783,6 +2833,18 @@ class GPUModelRunner(
 
         # Run the model.
         # Use persistent buffers for CUDA graphs.
+
+        # **********************instrument*****************************
+        print(f'{0} {batch_size} compute starts ({cur_stage}) at {time.time()}', file=f)
+        cur = time.time()
+        for new_reqs in scheduler_output.scheduled_new_reqs:
+            req_id = new_reqs.req_id
+            print(f'request {req_id} starts to compute ({cur_stage}) on worker at {cur}', file=f)
+
+        for old_req_id in scheduler_output.scheduled_cached_reqs.req_ids:
+            print(f'request {old_req_id} starts to compute ({cur_stage}) on worker at {cur}', file=f)
+        # **********************instrument*****************************
+
         with (
             set_forward_context(
                 attn_metadata,
@@ -2804,6 +2866,18 @@ class GPUModelRunner(
                 **model_kwargs,
             )
 
+        # **********************instrument*****************************
+        torch.cuda.synchronize()
+        cur = time.time()
+        for new_reqs in scheduler_output.scheduled_new_reqs:
+            req_id = new_reqs.req_id
+            print(f'request {req_id} finishes computing ({cur_stage}) on worker at {cur}', file=f)
+
+        for old_req_id in scheduler_output.scheduled_cached_reqs.req_ids:
+            print(f'request {old_req_id} finishes computing ({cur_stage}) on worker at {cur}', file=f)
+        print(f'{0} {batch_size} compute ends ({cur_stage}) at {time.time()}', file=f)
+        # **********************instrument*****************************
+
         with record_function_or_nullcontext("gpu_model_runner: postprocess"):
             if self.use_aux_hidden_state_outputs:
                 # True when EAGLE 3 is used.
@@ -2820,6 +2894,11 @@ class GPUModelRunner(
                     assert isinstance(hidden_states, IntermediateTensors)
                     hidden_states.kv_connector_output = kv_connector_output
                     self.kv_connector_output = kv_connector_output
+
+                    # **********************instrument*****************************
+                    f.close()
+                    # **********************instrument*****************************
+
                     return hidden_states
 
                 if self.is_pooling_model:
@@ -2828,6 +2907,11 @@ class GPUModelRunner(
                         hidden_states, num_scheduled_tokens, num_scheduled_tokens_np
                     )
                     output.kv_connector_output = kv_connector_output
+
+                    # **********************instrument*****************************
+                    f.close()
+                    # **********************instrument*****************************
+
                     return output
 
                 sample_hidden_states = hidden_states[logits_indices]
@@ -2873,6 +2957,11 @@ class GPUModelRunner(
             ec_connector_output,
         )
         self.kv_connector_output = kv_connector_output
+
+        # **********************instrument*****************************
+        f.close()
+        # **********************instrument*****************************
+
         return None
 
     @torch.inference_mode

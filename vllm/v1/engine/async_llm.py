@@ -342,6 +342,14 @@ class AsyncLLM(EngineClient):
 
         if self.log_requests:
             logger.info("Added request %s.", request.request_id)
+            
+        # **********************instrument*****************************
+        import os
+        server_id = os.environ.get('VLLM_SERVER_ID', '1')
+        f = open(f'server{server_id}.log', 'a')
+        print(f'request {request.request_id} is added at {time.time()}', file = f)
+        f.close()
+        # **********************instrument*****************************
 
     # TODO: we should support multiple prompts in one call, as you
     # can do with LLM.generate. So that for multi-prompt completion

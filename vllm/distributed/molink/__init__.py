@@ -51,7 +51,6 @@ from .utils import (
 )
 from .worker import (
     MolinkWorkerMixin,
-    init_molink_for_worker,
 )
 
 __all__ = [

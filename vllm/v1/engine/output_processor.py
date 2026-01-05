@@ -506,6 +506,16 @@ class OutputProcessor:
 
             # Free completed requests.
             if finish_reason is not None:
+                # **********************instrument*****************************
+                import time
+                import os
+                server_id = os.environ.get('VLLM_SERVER_ID', '1')
+                f = open(f'server{server_id}.log', 'a')
+                cur = time.time()
+                print(f'request {req_id} finished an iteration at {cur}', file = f)
+
+                f.close()
+                # **********************instrument*****************************
                 self.request_states.pop(req_id)
                 # Remove parent request if applicable.
                 parent_req = req_state.parent_req
